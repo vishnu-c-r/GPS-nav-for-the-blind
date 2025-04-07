@@ -1,3 +1,24 @@
+"""
+GPS Navigation System for the Visually Impaired
+
+This system combines QR code detection, GPS tracking, and text-to-speech to help
+visually impaired users navigate indoor environments. It uses a Raspberry Pi with
+camera module and GPS module to:
+1. Detect QR codes placed at key locations
+2. Track user's GPS coordinates
+3. Provide voice guidance for navigation
+4. Offer a web interface for monitoring
+
+Key Components:
+- Flask web server for monitoring interface
+- PiCamera2 for QR code detection
+- pyttsx3 for text-to-speech
+- networkx for pathfinding
+- GPS module integration
+- Speech recognition for hands-free input
+"""
+
+# Import required libraries
 import threading
 import time
 import cv2
@@ -13,6 +34,14 @@ from flask_cors import CORS
 ###############################################################################
 #                                FLASK SETUP                                  #
 ###############################################################################
+"""
+Flask server setup for web monitoring interface.
+Provides routes for:
+- Main webpage
+- Live video feed
+- GPS data updates
+- Real-time log streaming via Server-Sent Events (SSE)
+"""
 
 app = Flask(__name__)
 CORS(app)  
@@ -33,7 +62,11 @@ last_sse_index = 0       # keep track of last-sent index for SSE
 
 def add_log(message):
     """
-    Helper to add a log line to log_messages and also print to the console.
+    Helper to add a log line to log_messages and print to console.
+    Maintains a historical record of all system events and messages.
+    
+    Args:
+        message (str): The log message to record
     """
     print(message)
     log_messages.append(message)
@@ -59,6 +92,9 @@ def sse_logs():
     return Response(stream_logs(), mimetype='text/event-stream')
 
 def stream_logs():
+    """
+    Stream log messages to the web interface using Server-Sent Events (SSE).
+    """
     global last_sse_index
     while True:
         if last_sse_index < len(log_messages):
@@ -68,7 +104,13 @@ def stream_logs():
         time.sleep(1)
 
 def generate_frames():
-    """ Continuously capture frames from the camera and encode as JPEG """
+    """ 
+    Continuously capture frames from PiCamera2 and encode as JPEG for web streaming.
+    Uses Motion JPEG (MJPEG) format for real-time video feed.
+    
+    Yields:
+        bytes: JPEG encoded frame with proper multipart HTTP headers
+    """
     while True:
         frame = picam2.capture_array()
         ret, buffer = cv2.imencode('.jpg', frame)
@@ -78,15 +120,36 @@ def generate_frames():
                b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
 
 def run_flask_app():
-    """ Run the Flask server on all interfaces at port 5000 """
+    """ 
+    Run the Flask server in a separate thread.
+    Binds to all network interfaces (0.0.0.0) for remote access.
+    Uses port 5000 by default.
+    """
     app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
 
 ###############################################################################
 #                            GPS FUNCTIONALITY                                #
 ###############################################################################
+"""
+GPS module integration handling.
+Reads NMEA sentences from a serial GPS module and parses them for position data.
+Updates global gps_data dictionary with current coordinates and status.
+"""
 
 def read_gps():
-    """ Continuously read and parse GPS NMEA sentences in a background thread """
+    """ 
+    Continuously read and parse GPS NMEA sentences in a background thread.
+    
+    Handles two main NMEA sentence types:
+    - GNRMC (Recommended Minimum Navigation Information)
+    - GNGGA (Global Positioning System Fix Data)
+    
+    Updates global gps_data with:
+    - Latitude
+    - Longitude
+    - Altitude (when available)
+    - Connection status
+    """
     port = "/dev/ttyS0"
     baud_rate = 9600
 
@@ -117,9 +180,23 @@ def read_gps():
 ###############################################################################
 #                           QR NAVIGATION & TTS                               #
 ###############################################################################
+"""
+Core navigation functionality combining QR code detection and voice guidance.
+Includes text-to-speech, QR detection, and pathfinding between locations.
+"""
 
 def initialize_tts():
-    """ Initialize the TTS engine with custom parameters """
+    """ 
+    Initialize the text-to-speech engine with optimized parameters.
+    
+    Configures:
+    - Speech rate (150 words per minute)
+    - Volume level (80%)
+    - Optional voice selection
+    
+    Returns:
+        pyttsx3.Engine: Configured TTS engine instance
+    """
     engine = pyttsx3.init()
     # Example custom TTS settings:
     engine.setProperty('rate', 150)    # Speed (default ~200)
@@ -134,13 +211,28 @@ def initialize_tts():
     return engine
 
 def speak(engine, message):
-    """ Speak a message using TTS and log it """
+    """ 
+    Speak a message using TTS and log it.
+    
+    Args:
+        engine (pyttsx3.Engine): TTS engine instance
+        message (str): Message to speak
+    """
     add_log(f"[TTS] {message}")
     engine.say(message)
     engine.runAndWait()
 
 def define_qr_locations():
-    """ Return a dictionary mapping QR code IDs to location names """
+    """ 
+    Define the mapping of QR codes to physical locations.
+    
+    Structure:
+    - A* codes: Major landmarks and rooms
+    - B* codes: Intermediate navigation points
+    
+    Returns:
+        dict: Mapping of QR codes to location names
+    """
     return {
         "A1": "Room 515",
         "A2": "MTech Lab 514",
@@ -174,7 +266,19 @@ def define_qr_locations():
     }
 
 def build_graph(qr_data):
-    """ Build a directed graph of QR locations for navigation """
+    """ 
+    Build a directed graph representing the navigation network.
+    
+    Creates a bidirectional graph where:
+    - Nodes are QR code locations
+    - Edges represent walkable paths between locations
+    
+    Args:
+        qr_data (dict): Dictionary of QR codes and their location names
+        
+    Returns:
+        networkx.DiGraph: Directed graph for pathfinding
+    """
     G = nx.DiGraph()
     G.add_nodes_from(qr_data.keys())
     edges = [
@@ -191,7 +295,15 @@ def build_graph(qr_data):
     return G
 
 def detect_qr_code(frame):
-    """ Use OpenCV's QRCodeDetector to detect a QR code in the frame """
+    """ 
+    Detect and decode QR codes in a camera frame.
+    
+    Args:
+        frame: numpy.ndarray: Camera frame image
+        
+    Returns:
+        str or None: Decoded QR code data if found, None otherwise
+    """
     detector = cv2.QRCodeDetector()
     data, bbox, _ = detector.detectAndDecode(frame)
     if data:
@@ -199,14 +311,39 @@ def detect_qr_code(frame):
     return None
 
 def compute_route(graph, start, end):
-    """ Compute the shortest route between QR locations """
+    """ 
+    Compute the shortest path between two QR locations.
+    
+    Uses Dijkstra's algorithm via networkx for pathfinding.
+    
+    Args:
+        graph (networkx.DiGraph): Navigation graph
+        start (str): Starting QR code
+        end (str): Destination QR code
+        
+    Returns:
+        list or None: List of QR codes forming the path, or None if no path exists
+    """
     try:
         return nx.shortest_path(graph, source=start, target=end)
     except nx.NetworkXNoPath:
         return None
 
 def get_destination_voice(engine):
-    """ Listen for the user's spoken destination code and return it as text """
+    """ 
+    Listen for and process voice input for destination selection.
+    
+    Features:
+    - Automatic noise level adjustment
+    - 5-second timeout for input
+    - Google Speech Recognition API integration
+    
+    Args:
+        engine: TTS engine for user prompts
+        
+    Returns:
+        str or None: Recognized destination code or None if recognition failed
+    """
     recognizer = sr.Recognizer()
     microphone = sr.Microphone()
     speak(engine, "Please say your destination code after the beep.")
@@ -228,8 +365,26 @@ def get_destination_voice(engine):
 ###############################################################################
 #                                    MAIN                                     #
 ###############################################################################
+"""
+Main program flow coordinating all system components:
+1. Hardware initialization (camera, GPS)
+2. Web server startup
+3. Navigation session handling
+4. User interaction via voice and QR codes
+"""
 
 def main():
+    """
+    Main program execution flow.
+    
+    Sequence:
+    1. Initialize camera and configure video
+    2. Start Flask web server thread
+    3. Start GPS monitoring thread
+    4. Initialize TTS and navigation system
+    5. Guide user through navigation process
+    6. Clean up resources on completion
+    """
     global picam2
 
     # 1. Initialize PiCamera2 for live video
