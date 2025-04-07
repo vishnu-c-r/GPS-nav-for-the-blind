@@ -1,7 +1,5 @@
 # GPS Navigation System for the Visually Impaired
 
-A Raspberry Pi-based navigation system that combines QR code detection, GPS tracking, and text-to-speech to help visually impaired users navigate indoor environments.
-
 ## Features
 
 - QR code-based indoor navigation
