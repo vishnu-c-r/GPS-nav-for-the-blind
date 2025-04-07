@@ -35,6 +35,11 @@ from zeroconf import ServiceInfo, Zeroconf
 import socket
 import netifaces
 
+# Constants for web server
+WEB_PORT = 80  # Default HTTP port
+FALLBACK_PORT = 5000  # Fallback port if we don't have root privileges
+current_port = WEB_PORT  # Track which port we're actually using
+
 ###############################################################################
 #                                FLASK SETUP                                  #
 ###############################################################################
@@ -126,10 +131,18 @@ def generate_frames():
 def run_flask_app():
     """ 
     Run the Flask server in a separate thread.
-    Binds to all network interfaces (0.0.0.0) for remote access.
-    Uses port 5000 by default.
+    Attempts to use port 80, falls back to 5000 if not running as root.
     """
-    app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
+    global current_port
+    try:
+        app.run(host='0.0.0.0', port=WEB_PORT, debug=False, use_reloader=False)
+        current_port = WEB_PORT
+    except PermissionError:
+        add_log(f"[System] Cannot use port {WEB_PORT}, requires root privileges.")
+        add_log("[System] To run on port 80, use: sudo python3 main.py")
+        current_port = FALLBACK_PORT
+        add_log(f"[System] Falling back to port {FALLBACK_PORT}")
+        app.run(host='0.0.0.0', port=FALLBACK_PORT, debug=False, use_reloader=False)
 
 # Initialize zeroconf for service discovery
 def setup_mdns():
@@ -150,7 +163,7 @@ def setup_mdns():
             "_http._tcp.local.",
             service_name,
             addresses=[socket.inet_aton(ip_address)],
-            port=5000,  # Port is still needed in ServiceInfo but not in the name
+            port=current_port,  # Use the actual port we're running on
             properties={
                 'path': '/',
                 'version': '1.0',
@@ -440,7 +453,8 @@ def main():
     # 2. Start the Flask server in a background thread
     flask_thread = threading.Thread(target=run_flask_app, daemon=True)
     flask_thread.start()
-    add_log("[System] Flask server started on port 5000.")
+    time.sleep(2)  # Give Flask time to start and determine the port
+    add_log(f"[System] Flask server started on port {current_port}.")
 
     # 3. Start the GPS reading thread
     gps_thread = threading.Thread(target=read_gps, daemon=True)
