@@ -60,10 +60,6 @@ gps_data = {
     "status": "Waiting for GPS fix..."
 }
 
-# Constants for mDNS service advertisement
-HOSTNAME = "GPSNav"  # This will be used as GPSNav.local
-MDNS_SERVICE_PORT = 5000
-
 # ----------------------- SSE LOGS SETUP (for real-time logs) ----------------
 log_messages = []        # list of strings to store log lines
 last_sse_index = 0       # keep track of last-sent index for SSE
@@ -142,17 +138,19 @@ def setup_mdns():
     Uses the system hostname for service advertisement.
     """
     try:
-        ip_address = socket.gethostbyname(socket.gethostname())
+        hostname = socket.gethostname()
+        ip_address = socket.gethostbyname(hostname)
+        add_log(f"[mDNS] System hostname: {hostname}")
         add_log(f"[mDNS] Local IP address: {ip_address}")
         
-        # Using the hostname directly for the service name
-        service_name = f"{HOSTNAME}._http._tcp.local."
+        # Using a simpler service name format
+        service_name = f"{hostname}._http._tcp.local."
         
         info = ServiceInfo(
             "_http._tcp.local.",
             service_name,
             addresses=[socket.inet_aton(ip_address)],
-            port=MDNS_SERVICE_PORT,
+            port=5000,  # Port is still needed in ServiceInfo but not in the name
             properties={
                 'path': '/',
                 'version': '1.0',
@@ -162,7 +160,7 @@ def setup_mdns():
         
         zeroconf = Zeroconf()
         zeroconf.register_service(info)
-        add_log(f"[mDNS] Service registered as {HOSTNAME}.local")
+        add_log(f"[mDNS] Service registered successfully as {hostname}.local")
         return zeroconf, info
     except Exception as e:
         add_log(f"[mDNS] Error setting up mDNS: {e}")
