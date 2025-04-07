@@ -16,6 +16,7 @@ Key Components:
 - networkx for pathfinding
 - GPS module integration
 - Speech recognition for hands-free input
+- mDNS service advertisement for easy discovery
 """
 
 # Import required libraries
@@ -30,6 +31,9 @@ import pynmea2
 from picamera2 import Picamera2
 from flask import Flask, Response, jsonify, render_template
 from flask_cors import CORS  
+from zeroconf import ServiceInfo, Zeroconf
+import socket
+import netifaces
 
 ###############################################################################
 #                                FLASK SETUP                                  #
@@ -55,6 +59,10 @@ gps_data = {
     "altitude": None,
     "status": "Waiting for GPS fix..."
 }
+
+# Constants for mDNS service advertisement
+HOSTNAME = "GPSNav"  # This will be used as GPSNav.local
+MDNS_SERVICE_PORT = 5000
 
 # ----------------------- SSE LOGS SETUP (for real-time logs) ----------------
 log_messages = []        # list of strings to store log lines
@@ -126,6 +134,39 @@ def run_flask_app():
     Uses port 5000 by default.
     """
     app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
+
+# Initialize zeroconf for service discovery
+def setup_mdns():
+    """
+    Set up mDNS service advertisement for the web interface.
+    Uses the system hostname for service advertisement.
+    """
+    try:
+        ip_address = socket.gethostbyname(socket.gethostname())
+        add_log(f"[mDNS] Local IP address: {ip_address}")
+        
+        # Using the hostname directly for the service name
+        service_name = f"{HOSTNAME}._http._tcp.local."
+        
+        info = ServiceInfo(
+            "_http._tcp.local.",
+            service_name,
+            addresses=[socket.inet_aton(ip_address)],
+            port=MDNS_SERVICE_PORT,
+            properties={
+                'path': '/',
+                'version': '1.0',
+                'description': 'GPS Navigation System'
+            }
+        )
+        
+        zeroconf = Zeroconf()
+        zeroconf.register_service(info)
+        add_log(f"[mDNS] Service registered as {HOSTNAME}.local")
+        return zeroconf, info
+    except Exception as e:
+        add_log(f"[mDNS] Error setting up mDNS: {e}")
+        return None, None
 
 ###############################################################################
 #                            GPS FUNCTIONALITY                                #
@@ -408,12 +449,19 @@ def main():
     gps_thread.start()
     add_log("[System] GPS reading thread started.")
 
-    # 4. Initialize TTS and navigation data
+    # 4. Set up mDNS service advertisement
+    zeroconf, service_info = setup_mdns()
+    if zeroconf:
+        add_log("[System] mDNS service advertisement started")
+    else:
+        add_log("[System] Warning: mDNS service advertisement failed")
+
+    # 5. Initialize TTS and navigation data
     engine = initialize_tts()
     qr_data = define_qr_locations()
     nav_graph = build_graph(qr_data)
 
-    # 5. Prompt user to scan the starting QR code
+    # 6. Prompt user to scan the starting QR code
     speak(engine, "Please scan the starting QR code.")
     current_location = None
     while current_location is None:
@@ -423,7 +471,7 @@ def main():
             current_location = code
             speak(engine, f"Starting location detected: {qr_data[code]}")
 
-    # 6. Get destination via voice command
+    # 7. Get destination via voice command
     destination = None
     while destination not in qr_data:
         spoken_code = get_destination_voice(engine)
@@ -432,7 +480,7 @@ def main():
         else:
             speak(engine, "Invalid destination code. Please try again.")
 
-    # 7. Compute route
+    # 8. Compute route
     route = compute_route(nav_graph, current_location, destination)
     if not route:
         speak(engine, "No path found to the destination. Exiting navigation.")
@@ -443,7 +491,7 @@ def main():
     add_log(f"[Navigation] Route: {route}")
     route_index = 0
 
-    # 8. Navigation loop
+    # 9. Navigation loop
     while True:
         frame = picam2.capture_array()
         code = detect_qr_code(frame)
@@ -462,7 +510,11 @@ def main():
                 speak(engine, "This is not the expected QR code. Please keep scanning.")
         time.sleep(0.2)
 
-    # 9. Cleanup
+    # 10. Cleanup
+    if zeroconf:
+        zeroconf.unregister_service(service_info)
+        zeroconf.close()
+        add_log("[System] mDNS service unregistered")
     picam2.stop()
     add_log("[System] Navigation ended. Camera stopped.")
 
